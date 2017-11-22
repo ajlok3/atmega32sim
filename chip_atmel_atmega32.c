@@ -14,13 +14,19 @@
 #include "chip_atmel_atmega32.h"
 #include "sram.h"
 #include "flash.h"
-#define NUMREGS		32
+
+//REG defines
 #define X_HIGH			26
 #define X_LOW			27
 #define Y_HIGH			28
 #define Y_LOW			29
 #define Z_HIGH			30
 #define Z_LOW			31
+
+//IO defines
+#define SREG			0x3f
+
+
 #define BE(a, b) __builtin_expect(a, b)
 
 static uint8_t power = 1;
@@ -64,7 +70,8 @@ struct cpssp {
 	struct sig_std_logic *port_d7;
 	struct flash *flash;
 	struct sram *sram;
-	uint8_t REGS[32];
+	uint8_t REGS[0x20];
+	uint8_t IO[0x40];
 };
 static void
 chip_atmel_atmega32_port_a0_out_set(void *_cpssp, unsigned int val)
@@ -331,15 +338,21 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 	
 	//This is supposed to be veeeeery long
 	switch((inst & 0xf000)>>12){
-		case 9: //jmp
+		case 0x9: //jmp
 			inst = load_inst(flash);
 			set_pc(flash, inst);
 			printf("pc=%x\n", flash->pc);
 			break;
-		case 2: //eor
-			printf("dest=%x, source=%x", (inst>>4)&0x1f, (inst&0xf)|(0x200&inst));
+		case 0x2: //eor
+			//printf("dest=%x, source=%x", (inst>>4)&0x1f, (inst&0xf)|(0x200&inst));
 			cpssp->REGS[(inst>>4)&0x1f] = cpssp->REGS[(inst>>4)&0x1f]^cpssp->REGS[(inst&0xf)|(0x200&inst)];
 			break;
+		case 0xb: //out
+			printf("out: dest=%x, source=%x\n",((inst&0x600)>>5)|(inst&0xf), (inst & 0x01f0)>>4);
+			cpssp->IO[((inst&0x600)>>5)|(inst&0xf)] = cpssp->REGS[(inst & 0x01f0)>>4];
+			break;
+		default:
+			return;
 	}
 	
 }
@@ -533,7 +546,8 @@ chip_atmel_atmega32_create(
 		.set_ext = chip_atmel_atmega32_port_d7_out_set,
 	};
 	struct cpssp *cpssp = (struct cpssp*)malloc(sizeof(*cpssp));
-	for(int i=0; i<32; i++) cpssp->REGS[i]=0;
+	for(int i=0; i<0x20; i++) cpssp->REGS[i]=0;
+	for(int i=0; i<0x40; i++) cpssp->IO[i]=0;
 
 	assert(cpssp);
 
