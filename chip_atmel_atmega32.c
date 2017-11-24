@@ -339,7 +339,7 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 	struct flash *flash = cpssp->flash;
 
 	uint16_t inst = load_inst(flash);	
-	uint8_t res, sreg_val, reg_val, im_val;
+	uint8_t res, sreg_val, reg_val_r, reg_val_d, im_val;
 
 	//Read out Opcode
 	switch((inst & 0xf000)>>12){
@@ -348,35 +348,53 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 			set_pc(flash, inst);
 			printf("jmp to pc=%x\n", flash->pc);
 			break;
+
 		case 0x2: //eor
-			printf("eor: dest=%x, source=%x\n", (inst>>4)&0x1f, (inst&0xf)|(0x200&inst));
-			cpssp->REGS[(inst>>4)&0x1f] = cpssp->REGS[(inst>>4)&0x1f]^cpssp->REGS[(inst&0xf)|(0x200&inst)];
+			printf("eor: dest=%x, source=%x\n", (inst>>4)&0x1f, (inst&0xf)|((0x200&inst))>>5);
+			cpssp->REGS[(inst>>4)&0x1f] = cpssp->REGS[(inst>>4)&0x1f]^cpssp->REGS[(inst&0xf)|((0x200&inst))>>5];
 			break;
+
 		case 0xb: //out
 			printf("out: dest=%x, source=%x\n",((inst&0x600)>>5)|(inst&0xf), (inst & 0x01f0)>>4);
 			cpssp->IO[((inst&0x600)>>5)|(inst&0xf)] = cpssp->REGS[(inst & 0x01f0)>>4];
 			break;
+
 		case 0xe: //ldi
 			printf("ldi: dest=%x, value=%x\n", ((inst&0xf0)>>4)|0x10, (inst&0xf) | ((inst&0xf00)>>4));
 			cpssp->REGS[((inst&0xf0)>>4)|0x10] = (inst&0xf) | ((inst&0xf00)>>4);
 			break;
+
 		case 0xc: //rjmp
 			printf("rjmp: pc=pc+%x\n",(inst&0xfff));
 			set_pc(flash, flash->pc+(inst&0xfff));			
 			break;
+
 		case 0x3: //cpi
-			res = 0; sreg_val=0; reg_val=0; im_val = 0;			
-			reg_val = cpssp->REGS[((inst&0xf0)>>4)|0x10];
+			res = 0; sreg_val=0; reg_val_d=0; im_val = 0;			
+			reg_val_d = cpssp->REGS[((inst&0xf0)>>4)|0x10];
 			im_val = (inst&0xf) | ((inst&0xf00)>>4);
-			printf("cpi: reg=%x, value=%x\n", reg_val, im_val);
-			res = reg_val - im_val;
+			res = reg_val_d - im_val;
 			sreg_val |= ((!res)<<1); //zero-Flag
-			sreg_val |= (((~reg_val)&im_val) | (res&im_val) | (res&(~reg_val)))>>7; //carry-Flag
-			
-			//TODO: other flags
-			cpssp->IO[SREG] |= sreg_val;
-			printf("\t res=%x, sreg_val=%x\n", res, cpssp->IO[SREG]);
+			sreg_val |= (((~reg_val_d)&im_val) | (res&im_val) | (res&(~reg_val_d)))>>7; //carry-Flag
+			//TODO: other flags, 0x3 is the mask for set or cleared flags
+			cpssp->IO[SREG] &= ~0x3;
+			cpssp->IO[SREG] |= (sreg_val&0x3);
+			printf("cpi: reg_d=%x, value=%x, res=%x, SREG=%x\n",reg_val_d, im_val, res, cpssp->IO[SREG]);
 			break;
+
+		case 0x0: //cpc
+			res=0; sreg_val=0; reg_val_r=0; reg_val_d=0;
+			reg_val_d = cpssp->REGS[(inst>>4)&0x1f];
+			reg_val_r = cpssp->REGS[(inst&0xf)|((0x200&inst))>>5];
+			res = reg_val_d - reg_val_r - (cpssp->IO[SREG]&0x1);
+			sreg_val |= ((!res)&&(cpssp->IO[SREG]&0x2))<<1; //zero-flag
+			sreg_val |= (((~reg_val_d)&reg_val_r) | (res&reg_val_r) | (res&(~reg_val_d)))>>7; //carry-flag
+			//TODO: other flags, 0x3 is the mask for set or cleared flags		
+			cpssp->IO[SREG] &= ~0x3;
+			cpssp->IO[SREG] |= (sreg_val&0x3);
+			printf("cpc: reg_d=%x, reg_r=%x, res=%x, SREG=%x\n",reg_val_d, reg_val_r, res, cpssp->IO[SREG]);
+			break;
+
 		default:
 			printf("unknown inst, pc=%x\n",flash->pc);
 			return;
