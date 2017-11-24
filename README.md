@@ -1,7 +1,9 @@
 # vm
 ## Commands implemented
-jmp
-ldi
+cpi
 eor
+ldi
+jmp
 out
-rjmp 
+rjmp
+

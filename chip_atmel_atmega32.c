@@ -339,7 +339,7 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 	struct flash *flash = cpssp->flash;
 
 	uint16_t inst = load_inst(flash);	
-	
+	uint8_t res, sreg_val, reg_val, im_val;
 
 	//Read out Opcode
 	switch((inst & 0xf000)>>12){
@@ -359,6 +359,23 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 		case 0xe: //ldi
 			printf("ldi: dest=%x, value=%x\n", ((inst&0xf0)>>4)|0x10, (inst&0xf) | ((inst&0xf00)>>4));
 			cpssp->REGS[((inst&0xf0)>>4)|0x10] = (inst&0xf) | ((inst&0xf00)>>4);
+			break;
+		case 0xc: //rjmp
+			printf("rjmp: pc=pc+%x\n",(inst&0xfff));
+			set_pc(flash, flash->pc+(inst&0xfff));			
+			break;
+		case 0x3: //cpi
+			res = 0; sreg_val=0; reg_val=0; im_val = 0;			
+			reg_val = cpssp->REGS[((inst&0xf0)>>4)|0x10];
+			im_val = (inst&0xf) | ((inst&0xf00)>>4);
+			printf("cpi: reg=%x, value=%x\n", reg_val, im_val);
+			res = reg_val - im_val;
+			sreg_val |= ((!res)<<1); //zero-Flag
+			sreg_val |= (((~reg_val)&im_val) | (res&im_val) | (res&(~reg_val)))>>7; //carry-Flag
+			
+			//TODO: other flags
+			cpssp->IO[SREG] |= sreg_val;
+			printf("\t res=%x, sreg_val=%x\n", res, cpssp->IO[SREG]);
 			break;
 		default:
 			printf("unknown inst, pc=%x\n",flash->pc);
