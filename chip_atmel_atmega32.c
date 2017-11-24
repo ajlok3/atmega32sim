@@ -340,10 +340,11 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 
 	uint16_t inst = load_inst(flash);	
 	uint8_t res, sreg_val, reg_val_r, reg_val_d, im_val;
-
+	printf("pc=%x, ",flash->pc);
 	//Read out Opcode
 	switch((inst & 0xf000)>>12){
-		case 0x9: //jmp
+		case 0x9: //jmp, lpm
+			
 			inst = load_inst(flash);
 			set_pc(flash, inst);
 			printf("jmp to pc=%x\n", flash->pc);
@@ -393,6 +394,15 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 			cpssp->IO[SREG] &= ~0x3;
 			cpssp->IO[SREG] |= (sreg_val&0x3);
 			printf("cpc: reg_d=%x, reg_r=%x, res=%x, SREG=%x\n",reg_val_d, reg_val_r, res, cpssp->IO[SREG]);
+			break;
+
+		case 0xf: //brne
+			if(!(cpssp->IO[SREG]&0x2)){
+				flash->pc -= (((~inst)&0x3f8)>>3)+1;
+				printf("brne: pc=pc-%x\n",(((~inst)&0x3f8)>>3)+1); 
+			}else{
+				printf("brne: zero=1");		
+			}
 			break;
 
 		default:

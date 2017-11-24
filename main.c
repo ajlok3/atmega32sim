@@ -42,11 +42,8 @@ main(int argc, char **argv)
 	void *sram;
 	void *flash;
 	int i;
-	//flash must be initialized before gui_init() because this function erases argv[1]
 	
 	gui_init(&argc, &argv);
-	
-	printf("Hallo");
 
 	/* Create signals. */
 	nreset = sig_std_logic_create("nreset");
