@@ -24,6 +24,10 @@
 #define Z_LOW			31
 
 //IO defines
+
+	
+#define SP_L			0x3d
+#define SP_H			0x3e
 #define SREG			0x3f
 
 
@@ -336,22 +340,28 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 
 	uint16_t inst = load_inst(flash);	
 	
-	//This is supposed to be veeeeery long
+
+	//Read out Opcode
 	switch((inst & 0xf000)>>12){
 		case 0x9: //jmp
 			inst = load_inst(flash);
 			set_pc(flash, inst);
-			printf("pc=%x\n", flash->pc);
+			printf("jmp to pc=%x\n", flash->pc);
 			break;
 		case 0x2: //eor
-			//printf("dest=%x, source=%x", (inst>>4)&0x1f, (inst&0xf)|(0x200&inst));
+			printf("eor: dest=%x, source=%x\n", (inst>>4)&0x1f, (inst&0xf)|(0x200&inst));
 			cpssp->REGS[(inst>>4)&0x1f] = cpssp->REGS[(inst>>4)&0x1f]^cpssp->REGS[(inst&0xf)|(0x200&inst)];
 			break;
 		case 0xb: //out
 			printf("out: dest=%x, source=%x\n",((inst&0x600)>>5)|(inst&0xf), (inst & 0x01f0)>>4);
 			cpssp->IO[((inst&0x600)>>5)|(inst&0xf)] = cpssp->REGS[(inst & 0x01f0)>>4];
 			break;
+		case 0xe: //ldi
+			printf("ldi: dest=%x, value=%x\n", ((inst&0xf0)>>4)|0x10, (inst&0xf) | ((inst&0xf00)>>4));
+			cpssp->REGS[((inst&0xf0)>>4)|0x10] = (inst&0xf) | ((inst&0xf00)>>4);
+			break;
 		default:
+			printf("unknown inst, pc=%x\n",flash->pc);
 			return;
 	}
 	

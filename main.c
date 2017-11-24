@@ -1,5 +1,7 @@
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 #include "gui.h"
 #include "led.h"
@@ -119,12 +121,16 @@ main(int argc, char **argv)
 	sig_std_logic_set(gnd, main, SIG_STD_LOGIC_0);
 	sig_std_logic_set(vcc, main, SIG_STD_LOGIC_1);
 	for (i = 0; i < 100; i++) {
+		sleep(3);
 		chip_atmel_atmega32_step(cpu);
 	}
 	sig_std_logic_set(nreset, main, SIG_STD_LOGIC_1);
 	while (! end) {
 		seg7_step(dis1);
 		seg7_step(dis2);
+		//delay for debugging
+		sleep	(3);
+		//
 		chip_atmel_atmega32_step(cpu);
 		gui_step();
 	}
