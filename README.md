@@ -9,5 +9,5 @@ ldi
 lpm (ii) and (iii) case
 out
 rjmp
-st
+st (ii)
 
