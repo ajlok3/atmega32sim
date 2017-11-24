@@ -344,12 +344,17 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 	//Read out Opcode
 	switch((inst & 0xf000)>>12){
 		case 0x9: //jmp, lpm
-			
-			inst = load_inst(flash);
-			set_pc(flash, inst);
-			printf("jmp to pc=%x\n", flash->pc);
+			switch ((inst & 0x0e00)>>9){
+				case 0x0: //lpm (ii),(iii)				
+										
+					break;
+				case 0x2: //jmp				
+					inst = load_inst(flash);
+					set_pc(flash, inst);
+					printf("jmp to pc=%x\n", flash->pc);
+					break;
+			}
 			break;
-
 		case 0x2: //eor
 			printf("eor: dest=%x, source=%x\n", (inst>>4)&0x1f, (inst&0xf)|((0x200&inst))>>5);
 			cpssp->REGS[(inst>>4)&0x1f] = cpssp->REGS[(inst>>4)&0x1f]^cpssp->REGS[(inst&0xf)|((0x200&inst))>>5];

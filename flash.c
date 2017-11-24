@@ -58,12 +58,12 @@ int flash_binary(char *filename, struct flash *flash){
 	//Data position
 	fseek(elf, *prog_pos+4, SEEK_SET);
 	fread(data_pos, sizeof(uint16_t), 2, elf);
-	printf("data_pos: %x\n", *data_pos);
+	//printf("data_pos: %x\n", *data_pos);
 
 	//Data offset
 	fseek(elf, *prog_pos+16, SEEK_SET);
 	fread(data_off, sizeof(uint16_t), 2, elf);
-	printf("data_off: %x\n", *data_off);
+	//printf("data_off: %x\n", *data_off);
 
 	fseek(elf, *data_pos, SEEK_SET);	 
 	fread((flash->FLASH)+i, sizeof(uint16_t), (*data_off)/2, elf);
