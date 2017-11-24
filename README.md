@@ -4,8 +4,9 @@ brne
 cpc (z-flag, c-flag only)
 cpi (z-flag, c-flag only)
 eor
-ldi
 jmp
+ldi
+lpm (ii) and (iii) case
 out
 rjmp
 

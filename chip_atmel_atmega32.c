@@ -16,12 +16,12 @@
 #include "flash.h"
 
 //REG defines
-#define X_HIGH			26
-#define X_LOW			27
-#define Y_HIGH			28
-#define Y_LOW			29
-#define Z_HIGH			30
-#define Z_LOW			31
+#define X_LOW			26
+#define X_HIGH			27
+#define Y_LOW			28
+#define Y_HIGH			29
+#define Z_LOW			30
+#define Z_HIGH			31
 
 //IO defines
 
@@ -346,7 +346,13 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 		case 0x9: //jmp, lpm
 			switch ((inst & 0x0e00)>>9){
 				case 0x0: //lpm (ii),(iii)				
-										
+					cpssp->REGS[((inst&0x1f0)>>4)] = (flash->FLASH[(cpssp->REGS[Z_HIGH]<<7)|(cpssp->REGS[Z_LOW]>>1)])>>((cpssp->REGS[Z_LOW]&0x1)*8);
+					if(inst &0x1){
+						cpssp->REGS[Z_LOW]++; //lpm (iii)
+						if(!(cpssp->REGS[Z_LOW]))
+							cpssp->REGS[Z_HIGH]; //low overflow
+					}
+					printf("lpm: reg:%x, z_high:%x, z_low:%x\n",((inst&0x1f0)>>4), cpssp->REGS[Z_LOW], cpssp->REGS[Z_HIGH]);
 					break;
 				case 0x2: //jmp				
 					inst = load_inst(flash);
