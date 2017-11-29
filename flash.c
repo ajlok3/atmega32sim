@@ -3,7 +3,7 @@
 
 struct flash *new_flash(void){
 	struct flash *flash;
-	flash = (struct flash*)malloc(sizeof(*flash));
+	flash = (struct flash*)malloc(sizeof(struct flash));
 	for(int i=0; i<FLASHSIZE; i++){
 		flash->FLASH[i]=0;
 	}

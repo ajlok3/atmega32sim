@@ -30,7 +30,9 @@
 #define SP_H			0x3e
 #define SREG			0x3f
 
-
+#define STACK			sram->SRAM[(cpssp->IO[SP_H]<<8)|cpssp->IO[SP_L]]
+#define STACK_inc		if(!(~(cpssp->IO[SP_L]))) cpssp->IO[SP_H]++; cpssp->IO[SP_L]++;
+#define STACK_dec		if(!(cpssp->IO[SP_L])) cpssp->IO[SP_H]--; cpssp->IO[SP_L]--
 #define BE(a, b) __builtin_expect(a, b)
 
 static uint8_t power = 1;
@@ -337,38 +339,242 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 
 	struct sram *sram = cpssp->sram;
 	struct flash *flash = cpssp->flash;
-
+	printf("pc=%x, sp=%x: ",flash->pc, (cpssp->IO[SP_H]<<8)|cpssp->IO[SP_L]);
 	uint16_t inst = load_inst(flash);	
-	uint8_t res, sreg_val, reg_val_r, reg_val_d, im_val;
-	printf("pc=%x, ",flash->pc);
-	//Read out Opcode
+	static uint8_t res, sreg_val, reg_val_r, reg_val_d, im_val, reg_d, reg_r, disp;
+	static uint16_t val_16;
+	static int val_signed;
+	//Read Opcode
 	switch((inst & 0xf000)>>12){
-		case 0x9: //jmp, lpm
-			switch ((inst & 0x0e00)>>9){
-				case 0x0: //lpm (ii),(iii)				
-					cpssp->REGS[((inst&0x1f0)>>4)] = (flash->FLASH[(cpssp->REGS[Z_HIGH]<<7)|(cpssp->REGS[Z_LOW]>>1)])>>((cpssp->REGS[Z_LOW]&0x1)*8);
-					if(inst &0x1){
-						cpssp->REGS[Z_LOW]++; //lpm (iii)
-						if(!(cpssp->REGS[Z_LOW]))
-							cpssp->REGS[Z_HIGH]; //low overflow
+		case 0x9: //jmp, lpm, st, call, pop & much much more....
+			switch ((inst & 0x0f00)>>8){
+				case 0x0: case 0x1: //lpm (ii),(iii), pop
+					switch(inst&0xf){
+						case 0x4: case 0x5: //lpm
+							reg_d = (inst&0x1f0)>>4;
+							im_val = ((flash->FLASH[(cpssp->REGS[Z_HIGH]<<7)|(cpssp->REGS[Z_LOW]>>1)])>>((cpssp->REGS[Z_LOW]&0x1)*8))&0xff;
+							cpssp->REGS[reg_d] = im_val;
+							if(inst &0x1){
+								cpssp->REGS[Z_LOW]++; //lpm (iii)
+								if(!(cpssp->REGS[Z_LOW])){
+									cpssp->REGS[Z_HIGH]++; //low overflow
+								}
+							}
+							printf("lpm: dest:%x, val=%c, z_high:%x, z_low:%x\n", reg_d, im_val, cpssp->REGS[Z_HIGH], cpssp->REGS[Z_LOW]);
+							break;
+						case 0xf: //pop
+							reg_d = (inst&0x1f0)>>4;
+							STACK_inc;
+							cpssp->REGS[reg_d] = STACK;							
+							printf("pop: sp=%x, reg_d=%x, val=%x\n", (cpssp->IO[SP_H]<<8)|cpssp->IO[SP_L], reg_d, cpssp->REGS[reg_d]);
+							break;
 					}
-					printf("lpm: reg:%x, z_high:%x, z_low:%x\n",((inst&0x1f0)>>4), cpssp->REGS[Z_LOW], cpssp->REGS[Z_HIGH]);
 					break;
-				case 0x2: //jmp				
-					inst = load_inst(flash);
-					set_pc(flash, inst);
-					printf("jmp to pc=%x\n", flash->pc);
+
+				case 0x2: case 0x3: //st, push	
+					if((inst&0xf) == 0xf){ //push
+						STACK = cpssp->REGS[(inst>>4)&0x1f];
+						STACK_dec;
+						printf("push: reg=%x, sp=%x\n", (inst>>4)&0x1f, (cpssp->IO[SP_H]<<8)|cpssp->IO[SP_L]);
+						return;
+					}
+					switch((inst&0xc)>>2){ //st
+						case 0x3: //st X
+							reg_d = X_LOW;
+							break;
+						case 0x2: //st Y
+							reg_d = Y_LOW;
+							break;
+						case 0x0: //st z
+							reg_d = Z_LOW;
+							break;
+					}
+					if((inst&0x3) == 0x2){ //pre decrement
+						cpssp->REGS[reg_d]--;
+						if(cpssp->REGS[reg_d] == 0xff) cpssp->REGS[reg_d+1]--; //decrement high byte
+					}
+					sram->SRAM[(cpssp->REGS[reg_d+1]>>8)|cpssp->REGS[reg_d]] = cpssp->REGS[(inst&0x1f0)>>4];
+					if(inst&0x1){ //post increment
+						cpssp->REGS[reg_d]++;
+						if(!cpssp->REGS[reg_d]) cpssp->REGS[reg_d+1]++; //increment high byte					
+					}
+					printf("st: reg_d:%x, SRAM:%x, val:%c\n", reg_d, (cpssp->REGS[reg_d+1]>>8)|cpssp->REGS[reg_d], cpssp->REGS[(inst&0x1f0)>>4]);	
+					break;
+
+				case 0x4: case 0x5: //jmp, call, bclr, ret
+					switch(inst&0xf){
+						case 0xa: //dec
+							sreg_val = 0;
+							reg_d = (inst&0x1f0)>>4;
+							cpssp->REGS[reg_d]--;
+							sreg_val |= (!cpssp->REGS[reg_d])<<1; //zero
+							cpssp->IO[SREG] &= ~0x2;
+							cpssp->IO[SREG]|= sreg_val&0x2;
+							printf("dec: reg=%x, new_val=%x, SREG=%x\n", reg_d, cpssp->REGS[reg_d], cpssp->IO[SREG]);
+							break;
+						case 0x0: //com
+							reg_d = (inst&0x1f0)>>4;							
+							sreg_val = 0x1; //carry-flag always set
+							res = ~cpssp->REGS[reg_d];
+							sreg_val |= (!res)<<1; //zero-flag
+							cpssp->IO[SREG] &= ~0x3;
+							cpssp->IO[SREG] |= sreg_val&0x3;
+							printf("com: reg=%x, old_val=%x, new_val=%x, SREG=%x\n", reg_d, cpssp->REGS[reg_d], res, cpssp->IO[SREG]);			
+							cpssp->REGS[reg_d] = res;							
+							break;
+					}					
+					if(!((inst&0xe)^0xe)){ //call
+						inst = load_inst(flash);
+						//save pc						
+						STACK = ((flash->pc)&0xff00)>>8;
+						STACK_dec;
+						STACK = (flash->pc)&0xff;
+						STACK_dec;
+						set_pc(flash, inst);
+						printf("call: sp=%x, pc=%x\n", ((cpssp->IO[SP_H])<<8)|(cpssp->IO[SP_L]), flash->pc);						 
+					}else if(!((inst&0xe)^0xc)){ //jmp
+						inst = load_inst(flash);
+						set_pc(flash, inst);
+						printf("jmp to pc=%x\n", flash->pc);
+					}
+					if(((inst&0xf00)>>8) == 0x4){ //bclr: cli
+						if((inst&0xf) == 0x8){
+							switch((inst&0xf0)>>4){
+								case 0x0: //sec
+									printf("sec: not implemented\n");
+									break;
+							}
+							if(inst&0x80){//bclr
+								cpssp->IO[SREG] &= ~((0x1)<<((inst&0x70)>>4));
+								printf("bclr: s=%x\n", (inst&0x70)>>4);
+							}
+						}
+					} else { //0x5
+						if((inst&0xf) == 0x8){
+							switch((inst&0xf0)>>4){
+								case 0x0: //ret
+									STACK_inc;
+									val_16 = STACK;
+									STACK_inc;
+									val_16 |= (STACK)<<8;
+									set_pc(flash, val_16);
+									printf("ret: sp=%x, pc=%x\n", (cpssp->IO[SP_H]<<8)|cpssp->IO[SP_L], val_16);
+									break;
+							}
+						} 
+					}
+					break;
+				case 0x6: case 0x7://adiw, sbiw
+					sreg_val=0;					
+					reg_d = 0x18|((inst&0x30)>>3);
+					val_16 = (inst&0xf)|((inst&0xc0)>>2);
+					if(inst&0x100){ //sbiw
+						val_16 = ((cpssp->REGS[reg_d+1]<<8)|cpssp->REGS[reg_d])-val_16;
+						sreg_val |= ((val_16>>8)&(~cpssp->REGS[reg_d+1]))>>7; //carry-flag sbiw		
+						printf("sbiw: ");
+					}else{ //adiw
+						val_16 = ((cpssp->REGS[reg_d+1]<<8)|cpssp->REGS[reg_d])+val_16;
+						sreg_val |= ((~(val_16>>8))&(cpssp->REGS[reg_d+1]))>>7;						
+						printf("adiw: ");
+					}
+					if(!val_16) sreg_val |= 0x2; //zero-flag
+					cpssp->REGS[reg_d] = val_16&0xff;
+					cpssp->REGS[reg_d+1] = (val_16&0xff00)>>8;
+					cpssp->IO[SREG] &= ~0x3;
+					cpssp->IO[SREG] |= sreg_val&0x3;
+					printf("reg=%x, val=%x, SREG=%x\n", reg_d, (cpssp->REGS[reg_d+1]<<8)|cpssp->REGS[reg_d], cpssp->IO[SREG]);								
+					break;
+				case 0xc: case 0xd: case 0xe: case 0xf: //mul
+					sreg_val = 0;
+					reg_r = (inst&0xf)|((inst&0x200)>>5);
+					reg_d = (inst&0x1f0)>>4;
+					val_16 = cpssp->REGS[reg_d]*cpssp->REGS[reg_r];
+					cpssp->REGS[0] = val_16&0xff;
+					cpssp->REGS[1] = (val_16&0xff00)>>8;
+					sreg_val |= (!val_16)<<1;
+					sreg_val |= val_16>>15;
+					cpssp->IO[SREG] &= ~0x3;
+					cpssp->IO[SREG] |= sreg_val&0x3;
+					printf("mul: reg_d=%x, reg_r=%x, d_val=%x, r_val=%x, res=%x, SREG=%x\n",
+								reg_d, reg_r, cpssp->REGS[reg_d], cpssp->REGS[reg_r], val_16, cpssp->IO[SREG]);
 					break;
 			}
+			break; //case 0x9
+		
+		case 0x8:case 0xa: //std, ldd (with displacement)
+			reg_r = (inst>>4)&0x1f;			
+			reg_val_r = cpssp->REGS[reg_r];
+			disp = (inst&0x7)|((inst>>7)&0x18)|((inst>>8)&0x20);						
+			if(inst & 0x200){ //10th bit //std
+				if(inst & 0x8){ //std Y+q
+					val_16 = (cpssp->REGS[Y_HIGH]<<8)|cpssp->REGS[Y_LOW];
+					printf("std Y+q: reg_r=%x, reg_val_r=%x, addr=%x, disp=%x\n", reg_r, reg_val_r, val_16, disp);
+				}else{ //std Z+q
+					val_16 = (cpssp->REGS[Z_HIGH]<<8)|cpssp->REGS[Z_LOW];
+					printf("std Z+q: reg_r=%x, reg_val_r=%x, addr=%x, disp=%x\n", reg_r, reg_val_r, val_16, disp);
+				}
+				if(val_16+disp>=0x60) {sram->SRAM[val_16+disp] = reg_val_r;}
+				else if(val_16+disp>=0x20) {
+					cpssp->IO[val_16+disp-0x20] = reg_val_r;
+					if(val_16+disp-0x20 == 0x0c) fprintf(stderr, "%c", reg_val_r);
+				}
+				else {cpssp->REGS[val_16+disp] = reg_val_r;}
+			} else { //ldd
+				if(inst & 0x8){ //ldd Y+q
+					val_16 = (cpssp->REGS[Y_HIGH]<<8)|cpssp->REGS[Y_LOW];
+					printf("ldd Y+q: dest=%x, reg_val_r=%x, addr=%x, disp=%x, ", reg_r, reg_val_r, val_16, disp);
+				}else{ //ldd Z+q
+					val_16 = (cpssp->REGS[Z_HIGH]<<8)|cpssp->REGS[Z_LOW];
+					printf("ldd Z+q: dest=%x, reg_val_r=%x, addr=%x, disp=%x, ", reg_r, reg_val_r, val_16, disp);
+				}
+				if(val_16+disp>=0x60) {cpssp->REGS[reg_r] = sram->SRAM[val_16+disp];}
+				else if(val_16+disp>=0x20) {cpssp->REGS[reg_r] = cpssp->IO[val_16+disp-0x20];}
+				else {cpssp->REGS[reg_r] = cpssp->REGS[val_16+disp];}
+				printf("val=%x\n", cpssp->REGS[reg_r]);
+				break;		
+			}
 			break;
-		case 0x2: //eor
-			printf("eor: dest=%x, source=%x\n", (inst>>4)&0x1f, (inst&0xf)|((0x200&inst))>>5);
-			cpssp->REGS[(inst>>4)&0x1f] = cpssp->REGS[(inst>>4)&0x1f]^cpssp->REGS[(inst&0xf)|((0x200&inst))>>5];
+		
+		case 0x2: //and, eor, mov, or
+			reg_r = (inst&0xf)|((0x200&inst)>>5);
+			reg_d = (inst>>4)&0x1f;
+			sreg_val = 0; reg_val_r=cpssp->REGS[reg_r];
+			switch((inst&0xc00)>>10){
+				case 0x0: //and
+					cpssp->REGS[reg_d] &= reg_val_r;
+					if(!(cpssp->REGS[reg_d])) sreg_val|=0x2; //zero flag
+					printf("and: src=%x, dest=%x, val=%x\n", reg_r, reg_d, cpssp->REGS[reg_d]);
+					break;
+				case 0x1: //eor
+					cpssp->REGS[reg_d] ^= reg_val_r;
+					if(!(cpssp->REGS[reg_d])) sreg_val|=0x2; 
+					printf("eor: src=%x, dest=%x, val=%x\n", reg_r, reg_d, cpssp->REGS[reg_d]);
+					break;
+				case 0x2: //or
+					cpssp->REGS[reg_d] |= reg_val_r;
+					if(!(cpssp->REGS[reg_d])) sreg_val|=0x2; 
+					printf("or: src=%x, dest=%x, val=%x\n", reg_r, reg_d, cpssp->REGS[reg_d]);
+					break;
+				case 0x3: //mov
+					cpssp->REGS[reg_d] = reg_val_r;
+					printf("mov: src=%x, dest=%x, val=%x\n", reg_r, reg_d, cpssp->REGS[reg_d]);
+					return; //ret, because we don't have to set any flags	
+			}
+			//and, eor, or
+			cpssp->IO[SREG] &= ~(0x2);
+			cpssp->IO[SREG] |= sreg_val&0x2;
 			break;
 
-		case 0xb: //out
-			printf("out: dest=%x, source=%x\n",((inst&0x600)>>5)|(inst&0xf), (inst & 0x01f0)>>4);
-			cpssp->IO[((inst&0x600)>>5)|(inst&0xf)] = cpssp->REGS[(inst & 0x01f0)>>4];
+		case 0xb: //in, out
+			if(inst & 0x800){ //out
+				reg_d = ((inst&0x600)>>5)|(inst&0xf);				
+				printf("out: dest=%x, src=%x, val=%x\n",((inst&0x600)>>5)|(inst&0xf), (inst & 0x01f0)>>4, cpssp->REGS[(inst & 0x01f0)>>4]);
+				cpssp->IO[((inst&0x600)>>5)|(inst&0xf)] = cpssp->REGS[(inst & 0x01f0)>>4];
+				if(reg_d==0x0c) fprintf(stderr, "%c",cpssp->IO[reg_d]);//debug output
+			} else { //in
+				cpssp->REGS[(inst & 0x01f0)>>4] = cpssp->IO[((inst&0x600)>>5)|(inst&0xf)];
+				printf("in: dest=%x, src=%x, val=%x\n", (inst & 0x01f0)>>4, ((inst&0x600)>>5)|(inst&0xf), cpssp->IO[((inst&0x600)>>5)|(inst&0xf)]);
+			}
 			break;
 
 		case 0xe: //ldi
@@ -377,8 +583,9 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 			break;
 
 		case 0xc: //rjmp
-			printf("rjmp: pc=pc+%x\n",(inst&0xfff));
-			set_pc(flash, flash->pc+(inst&0xfff));			
+			val_signed = (!(inst&0x800))*(inst&0x7ff) - (!(!(inst&0x800)))*(((~inst)&0x7ff)+1);
+			printf("rjmp: pc=pc%+d\n",val_signed); 
+			set_pc(flash, flash->pc+val_signed);			
 			break;
 
 		case 0x3: //cpi
@@ -394,33 +601,151 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 			printf("cpi: reg_d=%x, value=%x, res=%x, SREG=%x\n",reg_val_d, im_val, res, cpssp->IO[SREG]);
 			break;
 
-		case 0x0: //cpc
-			res=0; sreg_val=0; reg_val_r=0; reg_val_d=0;
-			reg_val_d = cpssp->REGS[(inst>>4)&0x1f];
-			reg_val_r = cpssp->REGS[(inst&0xf)|((0x200&inst))>>5];
-			res = reg_val_d - reg_val_r - (cpssp->IO[SREG]&0x1);
-			sreg_val |= ((!res)&&(cpssp->IO[SREG]&0x2))<<1; //zero-flag
-			sreg_val |= (((~reg_val_d)&reg_val_r) | (res&reg_val_r) | (res&(~reg_val_d)))>>7; //carry-flag
-			//TODO: other flags, 0x3 is the mask for set or cleared flags		
-			cpssp->IO[SREG] &= ~0x3;
-			cpssp->IO[SREG] |= (sreg_val&0x3);
-			printf("cpc: reg_d=%x, reg_r=%x, res=%x, SREG=%x\n",reg_val_d, reg_val_r, res, cpssp->IO[SREG]);
+		case 0x0: //add, cpc, nop, movw
+			sreg_val = 0;			
+			switch((inst & 0xc00)>>10){
+				case 0x3: //add
+					reg_d = (inst&0x1f0)>>4;
+					reg_r = (inst&0xf)|((inst&0x200)>>5);
+					res = cpssp->REGS[reg_d] + cpssp->REGS[reg_r];
+					sreg_val |= (!res)<<1; //zero-flag
+					sreg_val |= ((cpssp->REGS[reg_d]&cpssp->REGS[reg_r]) ^ ((~res)&cpssp->REGS[reg_r]) ^ ((~res)&cpssp->REGS[reg_d]))>>7; //carry-flag
+					cpssp->IO[SREG] &= ~0x3;
+					cpssp->IO[SREG] |= (sreg_val&0x3);
+					printf("add: src=%x, dest=%x, src_val=%x, dest_val=%x, res=%x, SREG=%x\n", reg_r, reg_d, cpssp->REGS[reg_r], cpssp->REGS[reg_d], res, cpssp->IO[SREG]);
+					cpssp->REGS[reg_d] = res;					
+					break;
+				case 0x1: //cpc				
+					reg_val_d = cpssp->REGS[(inst>>4)&0x1f];
+					reg_val_r = cpssp->REGS[(inst&0xf)|((0x200&inst))>>5];
+					res = reg_val_d - reg_val_r - (cpssp->IO[SREG]&0x1);
+					sreg_val |= ((!res)&&(cpssp->IO[SREG]&0x2))<<1; //zero-flag
+					sreg_val |= (((~reg_val_d)&reg_val_r) ^ (res&reg_val_r) ^ (res&(~reg_val_d)))>>7; //carry-flag
+					//TODO: other flags, 0x3 is the mask for set or cleared flags		
+					cpssp->IO[SREG] &= ~0x3;
+					cpssp->IO[SREG] |= (sreg_val&0x3);
+					printf("cpc: reg_d=%x, reg_r=%x, res=%x, SREG=%x\n",reg_val_d, reg_val_r, res, cpssp->IO[SREG]);
+					break;
+				case 0x0: //nop, movw
+					if (!inst){ //nop
+						printf("nop\n");
+						return;
+					}
+					if ((inst & 0x300)==0x100){ //movw
+						reg_d = (inst & 0xf0)>>3;
+						reg_r = (inst & 0xf)<<1;
+						cpssp->REGS[reg_d] = cpssp->REGS[reg_r];
+						cpssp->REGS[reg_d+1] = cpssp->REGS[reg_r+1];
+						printf("movw: src=%x, dest=%x, word=%x\n", reg_r, reg_d, (cpssp->REGS[reg_d+1]<<8)|cpssp->REGS[reg_d]);
+					}
+					break;
+				case 0x2: //sbc
+					sreg_val = 0;
+					reg_d = (inst&0x1f0)>>4;
+					reg_r = (inst&0xf)|((inst&0x200)>>5);
+					reg_val_r = cpssp->REGS[reg_r];
+					reg_val_d = cpssp->REGS[reg_d];
+					res = reg_val_d - reg_val_r - (cpssp->IO[SREG]&0x1);
+					sreg_val |= (!res)>>1; //zero-flag
+					sreg_val |= ((~reg_val_d)&reg_val_r)^(reg_val_r&res)^(res&(~reg_val_d));
+					cpssp->IO[SREG] &= ~0x3;
+					cpssp->IO[SREG] |= sreg_val&0x3;
+					printf("sbc: reg_d=%x, reg_r=%x, val_d=%x, val_r=%x, res=%x, SREG=%x\n", 
+							  reg_d, reg_r, reg_val_d, reg_val_r, res, cpssp->IO[SREG]);
+					cpssp->REGS[reg_d] = res;
+					break;
+			}
 			break;
-
-		case 0xf: //brne
-			if(!(cpssp->IO[SREG]&0x2)){
-				flash->pc -= (((~inst)&0x3f8)>>3)+1;
-				printf("brne: pc=pc-%x\n",(((~inst)&0x3f8)>>3)+1); 
-			}else{
-				printf("brne: zero=1");		
+		case 0xf: //bld, bst, sbrc, sbrs, brbc, brbs
+			if(inst&0x800){ //bld, bst, sbrc, sbrs
+			
+			}else{ //brbc, brbs
+				val_16 = (inst&0x3f8)>>3; //pc_offset
+				//printf("(!(inst&0x400))=%x, !(cpssp->IO[SREG]&(0x1<<(inst&0x7)))=%x\n", !(inst&0x400), !(cpssp->IO[SREG]&(0x1<<(inst&0x7))));
+				val_signed = (((val_16&0x40)>>6)!=1)*((val_16&0x3f)) - ((val_16&0x40)>>6)*(((~val_16)&0x3f)+1);
+				if((!(inst&0x400)) != (!(cpssp->IO[SREG]&(0x1<<(inst&0x7))))){
+					flash->pc += val_signed;
+					printf("brbc, brbs: pc=pc%+d, bit=%x, SREG=%x, (cl=1, set=0)=%x\n",val_signed, inst&0x7, cpssp->IO[SREG], (inst&0x400)>>10); 
+				}else{
+					printf("brbc, brbs: condition fulfilled: SREG(%x), SREG=%x, (cl=1, set=0)=%x\n", inst&0x7, cpssp->IO[SREG], (inst&0x400)>>10);		
+				}
 			}
 			break;
 
+		case 0xd: //rcall
+			STACK = ((flash->pc)&0xff00)>>8;
+			STACK_dec;
+			STACK = flash->pc&0xff;
+			STACK_dec;
+			set_pc(flash, flash->pc+(inst&0xfff));
+			printf("rcall: pc=%x, sp=%x\n", flash->pc, (cpssp->IO[SP_H]<<8)|cpssp->IO[SP_L]);
+			break;
+		case 0x4: //sbci
+			sreg_val = 0;
+			reg_d = 0x10|((inst&0xf0)>>4);
+			im_val = ((inst&0xf00)>>4)|(inst&0xf);
+			res = cpssp->REGS[reg_d]-im_val-(cpssp->IO[SREG]&0x1);
+			sreg_val |= ((!res)&&(cpssp->IO[SREG]&0x2))<<1; //zero-flag
+			sreg_val |= (((~cpssp->REGS[reg_d])&im_val) ^ (res&im_val) ^ (res&(~cpssp->REGS[reg_d])))>>7; //carry-flag
+			//TODO: other flags, 0x3 is the mask for set or cleared flags		
+			cpssp->IO[SREG] &= ~0x3;
+			cpssp->IO[SREG] |= (sreg_val&0x3);
+			cpssp->REGS[reg_d] = res;
+			printf("sbci: reg_d=%x, val=%x, res=%x, SREG=%x\n", reg_d, im_val, res, cpssp->IO[SREG]);
+			break;
+		case 0x5: //subi
+			sreg_val = 0;
+			reg_d = 0x10|((inst&0xf0)>>4);
+			im_val = ((inst&0xf00)>>4)|(inst&0xf);
+			res = cpssp->REGS[reg_d]-im_val;
+			sreg_val |= (!res)<<1; //zero-flag
+			sreg_val |= (((~cpssp->REGS[reg_d])&im_val) ^ (res&im_val) ^ (res&(~cpssp->REGS[reg_d])))>>7; //carry-flag
+			//TODO: other flags, 0x3 is the mask for set or cleared flags		
+			cpssp->IO[SREG] &= ~0x3;
+			cpssp->IO[SREG] |= (sreg_val&0x3);
+			cpssp->REGS[reg_d] = res;
+			printf("subi: reg_d=%x, val=%x, res=%x, SREG=%x\n", reg_d, im_val, res, cpssp->IO[SREG]);
+			break;
+
+		case 0x1: //adc, cp, cpse, sub
+			sreg_val=0;			
+			reg_d = (inst&0x1f0)>>4;
+			reg_r = (inst&0xf)|((inst&0x200)>>5);
+			switch((inst&0xc00)>>10){
+				case 0x0: //cpse
+					if(cpssp->REGS[reg_d]-cpssp->REGS[reg_r]){ //not equal: do nothing
+					} else {
+						set_pc(flash, flash->pc+1);
+					}
+					sreg_val = cpssp->IO[SREG];
+					printf("cpse: src=%x, dest=%x, src_val=%x, dest_val=%x\n", reg_r, reg_d, cpssp->REGS[reg_r], cpssp->REGS[reg_d]);
+					break;
+				case 0x1: case 0x2: //cp, sub
+					res = cpssp->REGS[reg_d] - cpssp->REGS[reg_r];
+					sreg_val |= (!res)<<1; //zero-flag
+					sreg_val |= (((~cpssp->REGS[reg_d])&cpssp->REGS[reg_r]) ^ (res&cpssp->REGS[reg_r]) ^ (res&(~cpssp->REGS[reg_d])))>>7; //carry-flag
+					if(inst&0x800){ //sub
+						cpssp->REGS[reg_d] = res;
+						printf("(sub) ");
+					}					
+					printf("cp: src=%x, dest=%x, src_val=%x, dest_val=%x, SRAM=%x\n", reg_r, reg_d, cpssp->REGS[reg_r], cpssp->REGS[reg_d], sreg_val);					
+					break;
+
+				case 0x3: //adc
+					res = cpssp->REGS[reg_d] + cpssp->REGS[reg_r] + (cpssp->IO[SREG]&0x1);
+					sreg_val |= (!res)<<1; //zero-flag
+					sreg_val |= ((cpssp->REGS[reg_d]&cpssp->REGS[reg_r]) ^ ((~res)&cpssp->REGS[reg_r]) ^ ((~res)&cpssp->REGS[reg_d]))>>7; //carry-flag
+					printf("adc: src=%x, dest=%x, src_val=%x, dest_val=%x, res=%x\n", reg_r, reg_d, cpssp->REGS[reg_r], cpssp->REGS[reg_d], res);					
+					cpssp->REGS[reg_d] = res;					
+					break;
+			}
+			cpssp->IO[SREG] &= ~(0x3);
+			cpssp->IO[SREG] |= sreg_val&0x3;
+			break;
 		default:
 			printf("unknown inst, pc=%x\n",flash->pc);
 			return;
 	}
-	
 }
 
 void
@@ -611,7 +936,7 @@ chip_atmel_atmega32_create(
 	static const struct sig_std_logic_funcs port_d7_funcs = {
 		.set_ext = chip_atmel_atmega32_port_d7_out_set,
 	};
-	struct cpssp *cpssp = (struct cpssp*)malloc(sizeof(*cpssp));
+	struct cpssp *cpssp = (struct cpssp*)malloc(sizeof(struct cpssp));
 	for(int i=0; i<0x20; i++) cpssp->REGS[i]=0;
 	for(int i=0; i<0x40; i++) cpssp->IO[i]=0;
 
@@ -725,7 +1050,9 @@ chip_atmel_atmega32_create(
 	sig_std_logic_connect_in(port_d7, cpssp, &port_d7_funcs);
 	cpssp->flash = flash;
 	cpssp->sram = sram;
-	
+	cpssp->IO[SP_L] = (SRAMSIZE-1)&0xff;
+	cpssp->IO[SP_H] = ((SRAMSIZE-1)&0xff00)>>8;
+	printf("sp_h=%x, sp_l=%x\n", ((SRAMSIZE-1)&0xff00)>>8, (SRAMSIZE-1)&0xff);
 	return cpssp;
 }
 

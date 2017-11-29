@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#define FLASHSIZE 2048
+#define FLASHSIZE 0x4000 //32KB => 0x4000 entries
 
 struct flash {
 	uint16_t FLASH[FLASHSIZE];

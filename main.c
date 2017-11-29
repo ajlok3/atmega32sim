@@ -86,7 +86,6 @@ main(int argc, char **argv)
 			pb[4], pd[0], pb[3], pb[2]);
 
 	flash = new_flash();
-	//printf("%s\n", argv[1]);
 	if(flash_binary(argv[1], flash)){
 		printf("Could not load %s\n", argv[1]);
 			return 1;
@@ -117,17 +116,17 @@ main(int argc, char **argv)
 	sig_std_logic_set(nreset, main, SIG_STD_LOGIC_0);
 	sig_std_logic_set(gnd, main, SIG_STD_LOGIC_0);
 	sig_std_logic_set(vcc, main, SIG_STD_LOGIC_1);
-	for (i = 0; i < 100; i++) {
-		sleep(1);
+	for (i = 0; i < 1000; i++) {
+		//getchar();
+		//sleep(1);
 		chip_atmel_atmega32_step(cpu);
 	}
 	sig_std_logic_set(nreset, main, SIG_STD_LOGIC_1);
 	while (! end) {
 		seg7_step(dis1);
 		seg7_step(dis2);
-		//delay for debugging
-		sleep	(1);
-		//
+		//getchar();		
+		//sleep(1); 	//delay for debugging
 		chip_atmel_atmega32_step(cpu);
 		gui_step();
 	}

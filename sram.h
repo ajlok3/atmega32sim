@@ -4,11 +4,10 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#define SRAMSIZE 2048
+#define SRAMSIZE 4096
 
 struct sram {
-	uint8_t SRAM[SRAMSIZE];
-	uint16_t stack_pointer;	 
+	uint8_t SRAM[SRAMSIZE];	
 };
 
 struct sram *new_sram();
