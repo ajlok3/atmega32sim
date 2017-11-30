@@ -4,8 +4,10 @@
 
 int main(int argc, char**argv){
 	
-	uint16_t inst = 0xcea7;
-	int val_signed = (!(inst&0x800))*(inst&0x7ff) - (!(!(inst&0x800)))*(((~inst)&0x7ff)+1);
-	printf("val_signed = %+d\n", val_signed);
+	for(int j=0;j<400;j++){
+		uint8_t i = (uint8_t)j;
+		uint8_t res = 0x0-i;
+		printf("neg(%x)=%x, com(%x)=%x\n", i, res, i, (~i)&0xff);	
+	}
 	return 0;
 }

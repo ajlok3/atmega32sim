@@ -368,6 +368,41 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 							cpssp->REGS[reg_d] = STACK;							
 							printf("pop: sp=%x, reg_d=%x, val=%x\n", (cpssp->IO[SP_H]<<8)|cpssp->IO[SP_L], reg_d, cpssp->REGS[reg_d]);
 							break;
+						case 0x0: //lds
+							reg_d = (inst&0x1f0)>>4;
+							val_16 = load_inst(flash);
+							cpssp->REGS[reg_d] = sram->SRAM[val_16];
+							printf("lds: dest=%x, val=%x, addr=%x\n", reg_d, cpssp->REGS[reg_d], val_16);
+							break;
+						default: //ld X, Y, Z, +- //caution: elpm not implemented
+							reg_d = (inst&0x1f0)>>4;
+							switch(inst&0xf){
+								case 0x1: case 0x2:
+									reg_r = Z_LOW;
+									printf("st Z");
+									break;
+								case 0x9: case 0xa:
+									reg_r = Y_LOW;
+									printf("st Y");
+									break;
+								case 0xd: case 0xe:
+									reg_r = X_LOW;
+									printf("st X");
+									break;
+							}
+							if(!(inst&0x1)){
+								if(!cpssp->REGS[reg_r]) cpssp->REGS[reg_r+1]--;
+								cpssp->REGS[reg_r]--;
+								printf("-: ");
+							}
+							cpssp->REGS[reg_d] = sram->SRAM[(cpssp->REGS[reg_r+1]<<8)|cpssp->REGS[reg_r]];
+							if(inst&0x1){
+								cpssp->REGS[reg_r]++;
+								if(!(cpssp->REGS[reg_r])) cpssp->REGS[reg_r+1]++;
+								printf("+: ");
+							}
+							printf("XYZ_HIGH=%x, XYZ_LOW=%x, dest=%x, dest_val=%x\n", cpssp->REGS[reg_r+1], cpssp->REGS[reg_r], reg_d, cpssp->REGS[reg_d]);
+							break;
 					}
 					break;
 
@@ -393,12 +428,12 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 						cpssp->REGS[reg_d]--;
 						if(cpssp->REGS[reg_d] == 0xff) cpssp->REGS[reg_d+1]--; //decrement high byte
 					}
-					sram->SRAM[(cpssp->REGS[reg_d+1]>>8)|cpssp->REGS[reg_d]] = cpssp->REGS[(inst&0x1f0)>>4];
+					sram->SRAM[(cpssp->REGS[reg_d+1]<<8)|cpssp->REGS[reg_d]] = cpssp->REGS[(inst&0x1f0)>>4];
 					if(inst&0x1){ //post increment
 						cpssp->REGS[reg_d]++;
 						if(!cpssp->REGS[reg_d]) cpssp->REGS[reg_d+1]++; //increment high byte					
 					}
-					printf("st: reg_d:%x, SRAM:%x, val:%c\n", reg_d, (cpssp->REGS[reg_d+1]>>8)|cpssp->REGS[reg_d], cpssp->REGS[(inst&0x1f0)>>4]);	
+					printf("st: reg_d:%x, SRAM:%x, val:%c\n", reg_d, (cpssp->REGS[reg_d+1]<<8)|cpssp->REGS[reg_d], cpssp->REGS[(inst&0x1f0)>>4]);	
 					break;
 
 				case 0x4: case 0x5: //jmp, call, bclr, ret
@@ -420,7 +455,17 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 							cpssp->IO[SREG] &= ~0x3;
 							cpssp->IO[SREG] |= sreg_val&0x3;
 							printf("com: reg=%x, old_val=%x, new_val=%x, SREG=%x\n", reg_d, cpssp->REGS[reg_d], res, cpssp->IO[SREG]);			
-							cpssp->REGS[reg_d] = res;							
+							cpssp->REGS[reg_d] = res;
+							break;
+						case 0x1: //neg
+							reg_d = (inst&0x1f0)>>4;							
+							res = 0x0 - cpssp->REGS[reg_d];
+							sreg_val |= (!res)<<1; //zero-flag
+							sreg_val |= (!res)^0x1; //carry-flag always set expect when res=0
+							cpssp->IO[SREG] &= ~0x3;
+							cpssp->IO[SREG] |= sreg_val&0x3;
+							printf("neg: reg=%x, old_val=%x, new_val=%x, SREG=%x\n", reg_d, cpssp->REGS[reg_d], res, cpssp->IO[SREG]);			
+							cpssp->REGS[reg_d] = res;
 							break;
 					}					
 					if(!((inst&0xe)^0xe)){ //call
