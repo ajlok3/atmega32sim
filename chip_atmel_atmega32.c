@@ -335,18 +335,30 @@ chip_atmel_atmega32_port_d7_out_set(void *_cpssp, unsigned int val)
 	/* FIXME */
 }
 
-static uint8_t is_v_flag(uint8_t r_val, uint8_t d_val, uint8_t res){
+static uint8_t is_v_flag_add(uint8_t r_val, uint8_t d_val, uint8_t res){
 	uint8_t is_v;
-	is_v = (d_val & r_val & (~res)) ^ ((~d_val) & (~r_val) & res);
+	is_v = (d_val & r_val & (~res)) | ((~d_val) & (~r_val) & res);
 	is_v >>= 7;
 	return is_v;
 }
 
-static uint8_t is_s_flag(uint8_t r_val, uint8_t d_val, uint8_t res){
-	uint8_t is_s = is_v_flag(r_val, d_val, res);
+static uint8_t is_s_flag_add(uint8_t r_val, uint8_t d_val, uint8_t res){
+	uint8_t is_s = is_v_flag_add(r_val, d_val, res);
 	is_s ^= res>>7;
 	return is_s;
 }
+static uint8_t is_v_flag_sub(uint8_t r_val, uint8_t d_val, uint8_t res){
+	uint8_t is_v;
+	is_v = (d_val & (~r_val) & (~res)) | ((~d_val) & r_val & res);
+	is_v >>= 7;
+	return is_v;
+}
+static uint8_t is_s_flag_sub(uint8_t r_val, uint8_t d_val, uint8_t res){
+	uint8_t is_s = is_v_flag_sub(r_val, d_val, res);
+	is_s ^= res>>7;
+	return is_s;
+}
+
 
 static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 
@@ -614,7 +626,7 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 				case 0x3: //mov
 					cpssp->REGS[reg_d] = reg_val_r; //zero
 					sreg_val = cpssp->IO[SREG];
-					printf("mov: src=%x, dest=%x, val=%x ", reg_r, reg_d, cpssp->REGS[reg_d]);
+					printf("mov: src=%x, dest=%x, val=%x\n", reg_r, reg_d, cpssp->REGS[reg_d]);
 					return; //ret, because we don't have to set any flags	
 			}
 			//and, eor, or
@@ -677,9 +689,9 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 					reg_val_r = cpssp->REGS[(inst&0xf)|((0x200&inst))>>5];
 					res = reg_val_d - reg_val_r - (cpssp->IO[SREG]&0x1);
 					sreg_val |= ((!res)&&(cpssp->IO[SREG]&0x2))<<1; //zero-flag
-					sreg_val |= is_s_flag(reg_val_r, res, reg_val_d)<<4; //signed
+					sreg_val |= is_s_flag_sub(reg_val_r, reg_val_d, res)<<4; //signed
 					sreg_val |= (((~reg_val_d)&reg_val_r) ^ (res&reg_val_r) ^ (res&(~reg_val_d)))>>7; //carry-flag
-					//TODO: other flags, 0x3 is the mask for set or cleared flags		
+					//TODO: other flags, 0x13 is the mask for set or cleared flags		
 					cpssp->IO[SREG] &= ~0x13;
 					cpssp->IO[SREG] |= (sreg_val&0x13);
 					printf("cpc: reg_d=%x, reg_r=%x, res=%x, SREG=%x\n",reg_val_d, reg_val_r, res, cpssp->IO[SREG]);
@@ -780,19 +792,19 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 				case 0x1: case 0x2: //cp, sub
 					res = cpssp->REGS[reg_d] - cpssp->REGS[reg_r];
 					sreg_val |= (!res)<<1; //zero-flag
-					sreg_val |= is_s_flag(cpssp->REGS[reg_r], res, cpssp->REGS[reg_d])<<4; //signed
+					sreg_val |= is_s_flag_sub(cpssp->REGS[reg_r], cpssp->REGS[reg_d], res)<<4; //signed
 					sreg_val |= (((~cpssp->REGS[reg_d])&cpssp->REGS[reg_r]) ^ (res&cpssp->REGS[reg_r]) ^ (res&(~cpssp->REGS[reg_d])))>>7; //carry-flag
 					if(inst&0x800){ //sub
 						cpssp->REGS[reg_d] = res;
 						printf("(sub) ");
 					}					
-					printf("cp: src=%x, dest=%x, src_val=%x, dest_val=%x, SREG=%x\n", reg_r, reg_d, cpssp->REGS[reg_r], cpssp->REGS[reg_d], sreg_val);					
+					printf("cp: src=%x, dest=%x, src_val=%x, dest_val=%x, res=%x, SREG=%x\n", reg_r, reg_d, cpssp->REGS[reg_r], cpssp->REGS[reg_d], res, sreg_val);					
 					break;
 
 				case 0x3: //adc
 					res = cpssp->REGS[reg_d] + cpssp->REGS[reg_r] + (cpssp->IO[SREG]&0x1);
 					sreg_val |= (!res)<<1; //zero-flag
-					sreg_val |= is_s_flag(cpssp->REGS[reg_r], cpssp->REGS[reg_d], res);
+					sreg_val |= is_s_flag_add(cpssp->REGS[reg_r], cpssp->REGS[reg_d], res);
 					sreg_val |= ((cpssp->REGS[reg_d]&cpssp->REGS[reg_r]) ^ ((~res)&cpssp->REGS[reg_r]) ^ ((~res)&cpssp->REGS[reg_d]))>>7; //carry-flag
 					printf("adc: src=%x, dest=%x, src_val=%x, dest_val=%x, res=%x\n", reg_r, reg_d, cpssp->REGS[reg_r], cpssp->REGS[reg_d], res);					
 					cpssp->REGS[reg_d] = res;					
