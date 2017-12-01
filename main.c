@@ -116,8 +116,8 @@ main(int argc, char **argv)
 	sig_std_logic_set(nreset, main, SIG_STD_LOGIC_0);
 	sig_std_logic_set(gnd, main, SIG_STD_LOGIC_0);
 	sig_std_logic_set(vcc, main, SIG_STD_LOGIC_1);
-	for (i = 0; i < 1000; i++) {
-		getchar();
+	for (i = 0; i < 3000; i++) {
+		//getchar();
 		//sleep(1);
 		chip_atmel_atmega32_step(cpu);
 	}
@@ -125,7 +125,7 @@ main(int argc, char **argv)
 	while (! end) {
 		seg7_step(dis1);
 		seg7_step(dis2);
-		getchar();		
+		//getchar();		
 		//sleep(1); 	//delay for debugging
 		chip_atmel_atmega32_step(cpu);
 		gui_step();

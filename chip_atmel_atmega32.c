@@ -31,7 +31,7 @@
 #define SREG			0x3f
 
 #define STACK			sram->SRAM[(cpssp->IO[SP_H]<<8)|cpssp->IO[SP_L]]
-#define STACK_inc		if(!(~(cpssp->IO[SP_L]))) cpssp->IO[SP_H]++; cpssp->IO[SP_L]++;
+#define STACK_inc		cpssp->IO[SP_L]++; if(!(cpssp->IO[SP_L])) cpssp->IO[SP_H]++;
 #define STACK_dec		if(!(cpssp->IO[SP_L])) cpssp->IO[SP_H]--; cpssp->IO[SP_L]--
 #define BE(a, b) __builtin_expect(a, b)
 
@@ -335,6 +335,19 @@ chip_atmel_atmega32_port_d7_out_set(void *_cpssp, unsigned int val)
 	/* FIXME */
 }
 
+static uint8_t is_v_flag(uint8_t r_val, uint8_t d_val, uint8_t res){
+	uint8_t is_v;
+	is_v = (d_val & r_val & (~res)) ^ ((~d_val) & (~r_val) & res);
+	is_v >>= 7;
+	return is_v;
+}
+
+static uint8_t is_s_flag(uint8_t r_val, uint8_t d_val, uint8_t res){
+	uint8_t is_s = is_v_flag(r_val, d_val, res);
+	is_s ^= res>>7;
+	return is_s;
+}
+
 static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 
 	struct sram *sram = cpssp->sram;
@@ -344,6 +357,8 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 	static uint8_t res, sreg_val, reg_val_r, reg_val_d, im_val, reg_d, reg_r, disp;
 	static uint16_t val_16;
 	static int val_signed;
+	
+	reg_d = (inst&0x1f0)>>4;
 	//Read Opcode
 	switch((inst & 0xf000)>>12){
 		case 0x9: //jmp, lpm, st, call, pop & much much more....
@@ -351,7 +366,6 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 				case 0x0: case 0x1: //lpm (ii),(iii), pop
 					switch(inst&0xf){
 						case 0x4: case 0x5: //lpm
-							reg_d = (inst&0x1f0)>>4;
 							im_val = ((flash->FLASH[(cpssp->REGS[Z_HIGH]<<7)|(cpssp->REGS[Z_LOW]>>1)])>>((cpssp->REGS[Z_LOW]&0x1)*8))&0xff;
 							cpssp->REGS[reg_d] = im_val;
 							if(inst &0x1){
@@ -363,19 +377,16 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 							printf("lpm: dest:%x, val=%c, z_high:%x, z_low:%x\n", reg_d, im_val, cpssp->REGS[Z_HIGH], cpssp->REGS[Z_LOW]);
 							break;
 						case 0xf: //pop
-							reg_d = (inst&0x1f0)>>4;
 							STACK_inc;
 							cpssp->REGS[reg_d] = STACK;							
 							printf("pop: sp=%x, reg_d=%x, val=%x\n", (cpssp->IO[SP_H]<<8)|cpssp->IO[SP_L], reg_d, cpssp->REGS[reg_d]);
 							break;
 						case 0x0: //lds
-							reg_d = (inst&0x1f0)>>4;
 							val_16 = load_inst(flash);
 							cpssp->REGS[reg_d] = sram->SRAM[val_16];
 							printf("lds: dest=%x, val=%x, addr=%x\n", reg_d, cpssp->REGS[reg_d], val_16);
 							break;
 						default: //ld X, Y, Z, +- //caution: elpm not implemented
-							reg_d = (inst&0x1f0)>>4;
 							switch(inst&0xf){
 								case 0x1: case 0x2:
 									reg_r = Z_LOW;
@@ -408,9 +419,9 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 
 				case 0x2: case 0x3: //st, push	
 					if((inst&0xf) == 0xf){ //push
-						STACK = cpssp->REGS[(inst>>4)&0x1f];
+						STACK = cpssp->REGS[reg_d];
 						STACK_dec;
-						printf("push: reg=%x, sp=%x\n", (inst>>4)&0x1f, (cpssp->IO[SP_H]<<8)|cpssp->IO[SP_L]);
+						printf("push: reg=%x, sp=%x\n", reg_d, (cpssp->IO[SP_H]<<8)|cpssp->IO[SP_L]);
 						return;
 					}
 					switch((inst&0xc)>>2){ //st
@@ -440,15 +451,14 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 					switch(inst&0xf){
 						case 0xa: //dec
 							sreg_val = 0;
-							reg_d = (inst&0x1f0)>>4;
+							
 							cpssp->REGS[reg_d]--;
 							sreg_val |= (!cpssp->REGS[reg_d])<<1; //zero
 							cpssp->IO[SREG] &= ~0x2;
 							cpssp->IO[SREG]|= sreg_val&0x2;
 							printf("dec: reg=%x, new_val=%x, SREG=%x\n", reg_d, cpssp->REGS[reg_d], cpssp->IO[SREG]);
 							break;
-						case 0x0: //com
-							reg_d = (inst&0x1f0)>>4;							
+						case 0x0: //com							
 							sreg_val = 0x1; //carry-flag always set
 							res = ~cpssp->REGS[reg_d];
 							sreg_val |= (!res)<<1; //zero-flag
@@ -457,8 +467,7 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 							printf("com: reg=%x, old_val=%x, new_val=%x, SREG=%x\n", reg_d, cpssp->REGS[reg_d], res, cpssp->IO[SREG]);			
 							cpssp->REGS[reg_d] = res;
 							break;
-						case 0x1: //neg
-							reg_d = (inst&0x1f0)>>4;							
+						case 0x1: //neg						
 							res = 0x0 - cpssp->REGS[reg_d];
 							sreg_val |= (!res)<<1; //zero-flag
 							sreg_val |= (!res)^0x1; //carry-flag always set expect when res=0
@@ -547,7 +556,7 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 			break; //case 0x9
 		
 		case 0x8:case 0xa: //std, ldd (with displacement)
-			reg_r = (inst>>4)&0x1f;			
+			reg_r = (inst>>4)&0x1f;		
 			reg_val_r = cpssp->REGS[reg_r];
 			disp = (inst&0x7)|((inst>>7)&0x18)|((inst>>8)&0x20);						
 			if(inst & 0x200){ //10th bit //std
@@ -582,32 +591,36 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 		
 		case 0x2: //and, eor, mov, or
 			reg_r = (inst&0xf)|((0x200&inst)>>5);
-			reg_d = (inst>>4)&0x1f;
 			sreg_val = 0; reg_val_r=cpssp->REGS[reg_r];
 			switch((inst&0xc00)>>10){
 				case 0x0: //and
 					cpssp->REGS[reg_d] &= reg_val_r;
 					if(!(cpssp->REGS[reg_d])) sreg_val|=0x2; //zero flag
-					printf("and: src=%x, dest=%x, val=%x\n", reg_r, reg_d, cpssp->REGS[reg_d]);
+					sreg_val |= (cpssp->REGS[reg_d]&0x80)>>3; //signed
+					printf("and: src=%x, dest=%x, val=%x, ", reg_r, reg_d, cpssp->REGS[reg_d]);
 					break;
 				case 0x1: //eor
 					cpssp->REGS[reg_d] ^= reg_val_r;
-					if(!(cpssp->REGS[reg_d])) sreg_val|=0x2; 
-					printf("eor: src=%x, dest=%x, val=%x\n", reg_r, reg_d, cpssp->REGS[reg_d]);
+					if(!(cpssp->REGS[reg_d])) sreg_val|=0x2; //zero
+					sreg_val |= (cpssp->REGS[reg_d]&0x80)>>3; //signed
+					printf("eor: src=%x, dest=%x, val=%x ", reg_r, reg_d, cpssp->REGS[reg_d]);
 					break;
 				case 0x2: //or
 					cpssp->REGS[reg_d] |= reg_val_r;
-					if(!(cpssp->REGS[reg_d])) sreg_val|=0x2; 
-					printf("or: src=%x, dest=%x, val=%x\n", reg_r, reg_d, cpssp->REGS[reg_d]);
+					if(!(cpssp->REGS[reg_d])) sreg_val|=0x2; //zero
+					sreg_val |= (cpssp->REGS[reg_d]&0x80)>>3; //signed 
+					printf("or: src=%x, dest=%x, val=%x ", reg_r, reg_d, cpssp->REGS[reg_d]);
 					break;
 				case 0x3: //mov
-					cpssp->REGS[reg_d] = reg_val_r;
-					printf("mov: src=%x, dest=%x, val=%x\n", reg_r, reg_d, cpssp->REGS[reg_d]);
+					cpssp->REGS[reg_d] = reg_val_r; //zero
+					sreg_val = cpssp->IO[SREG];
+					printf("mov: src=%x, dest=%x, val=%x ", reg_r, reg_d, cpssp->REGS[reg_d]);
 					return; //ret, because we don't have to set any flags	
 			}
 			//and, eor, or
-			cpssp->IO[SREG] &= ~(0x2);
-			cpssp->IO[SREG] |= sreg_val&0x2;
+			cpssp->IO[SREG] &= ~(0x12);
+			cpssp->IO[SREG] |= sreg_val&0x12;
+			printf("SREG=%x\n", cpssp->IO[SREG]);
 			break;
 
 		case 0xb: //in, out
@@ -650,7 +663,6 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 			sreg_val = 0;			
 			switch((inst & 0xc00)>>10){
 				case 0x3: //add
-					reg_d = (inst&0x1f0)>>4;
 					reg_r = (inst&0xf)|((inst&0x200)>>5);
 					res = cpssp->REGS[reg_d] + cpssp->REGS[reg_r];
 					sreg_val |= (!res)<<1; //zero-flag
@@ -661,14 +673,15 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 					cpssp->REGS[reg_d] = res;					
 					break;
 				case 0x1: //cpc				
-					reg_val_d = cpssp->REGS[(inst>>4)&0x1f];
+					reg_val_d = cpssp->REGS[reg_d];
 					reg_val_r = cpssp->REGS[(inst&0xf)|((0x200&inst))>>5];
 					res = reg_val_d - reg_val_r - (cpssp->IO[SREG]&0x1);
 					sreg_val |= ((!res)&&(cpssp->IO[SREG]&0x2))<<1; //zero-flag
+					sreg_val |= is_s_flag(reg_val_r, res, reg_val_d)<<4; //signed
 					sreg_val |= (((~reg_val_d)&reg_val_r) ^ (res&reg_val_r) ^ (res&(~reg_val_d)))>>7; //carry-flag
 					//TODO: other flags, 0x3 is the mask for set or cleared flags		
-					cpssp->IO[SREG] &= ~0x3;
-					cpssp->IO[SREG] |= (sreg_val&0x3);
+					cpssp->IO[SREG] &= ~0x13;
+					cpssp->IO[SREG] |= (sreg_val&0x13);
 					printf("cpc: reg_d=%x, reg_r=%x, res=%x, SREG=%x\n",reg_val_d, reg_val_r, res, cpssp->IO[SREG]);
 					break;
 				case 0x0: //nop, movw
@@ -686,12 +699,11 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 					break;
 				case 0x2: //sbc
 					sreg_val = 0;
-					reg_d = (inst&0x1f0)>>4;
 					reg_r = (inst&0xf)|((inst&0x200)>>5);
 					reg_val_r = cpssp->REGS[reg_r];
 					reg_val_d = cpssp->REGS[reg_d];
 					res = reg_val_d - reg_val_r - (cpssp->IO[SREG]&0x1);
-					sreg_val |= (!res)>>1; //zero-flag
+					sreg_val |= (!res)<<1; //zero-flag
 					sreg_val |= ((~reg_val_d)&reg_val_r)^(reg_val_r&res)^(res&(~reg_val_d));
 					cpssp->IO[SREG] &= ~0x3;
 					cpssp->IO[SREG] |= sreg_val&0x3;
@@ -768,24 +780,26 @@ static void chip_atmel_atmega32_exec_inst(struct cpssp *cpssp){
 				case 0x1: case 0x2: //cp, sub
 					res = cpssp->REGS[reg_d] - cpssp->REGS[reg_r];
 					sreg_val |= (!res)<<1; //zero-flag
+					sreg_val |= is_s_flag(cpssp->REGS[reg_r], res, cpssp->REGS[reg_d])<<4; //signed
 					sreg_val |= (((~cpssp->REGS[reg_d])&cpssp->REGS[reg_r]) ^ (res&cpssp->REGS[reg_r]) ^ (res&(~cpssp->REGS[reg_d])))>>7; //carry-flag
 					if(inst&0x800){ //sub
 						cpssp->REGS[reg_d] = res;
 						printf("(sub) ");
 					}					
-					printf("cp: src=%x, dest=%x, src_val=%x, dest_val=%x, SRAM=%x\n", reg_r, reg_d, cpssp->REGS[reg_r], cpssp->REGS[reg_d], sreg_val);					
+					printf("cp: src=%x, dest=%x, src_val=%x, dest_val=%x, SREG=%x\n", reg_r, reg_d, cpssp->REGS[reg_r], cpssp->REGS[reg_d], sreg_val);					
 					break;
 
 				case 0x3: //adc
 					res = cpssp->REGS[reg_d] + cpssp->REGS[reg_r] + (cpssp->IO[SREG]&0x1);
 					sreg_val |= (!res)<<1; //zero-flag
+					sreg_val |= is_s_flag(cpssp->REGS[reg_r], cpssp->REGS[reg_d], res);
 					sreg_val |= ((cpssp->REGS[reg_d]&cpssp->REGS[reg_r]) ^ ((~res)&cpssp->REGS[reg_r]) ^ ((~res)&cpssp->REGS[reg_d]))>>7; //carry-flag
 					printf("adc: src=%x, dest=%x, src_val=%x, dest_val=%x, res=%x\n", reg_r, reg_d, cpssp->REGS[reg_r], cpssp->REGS[reg_d], res);					
 					cpssp->REGS[reg_d] = res;					
 					break;
 			}
-			cpssp->IO[SREG] &= ~(0x3);
-			cpssp->IO[SREG] |= sreg_val&0x3;
+			cpssp->IO[SREG] &= ~(0x13);
+			cpssp->IO[SREG] |= sreg_val&0x13;
 			break;
 		default:
 			printf("unknown inst, pc=%x\n",flash->pc);
